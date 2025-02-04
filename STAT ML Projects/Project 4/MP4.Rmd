@@ -1,0 +1,453 @@
+---
+title: "Section 2: Code"
+output: pdf_document
+geometry: margin = 0.5in
+header-includes:
+  - \usepackage{setspace}
+  - \setstretch{1.2}
+  - \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Load Required Libraries
+library(ggplot2)
+library(boot)
+library(glmnet)
+library(dplyr)
+library(leaps)
+library(caret)
+
+set.seed(1)
+
+```
+
+## Problem 1
+# (a): 
+```{r, fig.width=4, fig.height=4}
+plasma <- read.csv("plasma_volume.csv")
+
+#---------DATA ANALYSIS : ------------------------
+#Check for missing values 
+sum(is.na(plasma))
+
+#Check the structure of the data we are working with to know what variables we have, etc.
+str(plasma)
+summary(plasma)
+
+#-------------------------PLOTS : --------------------------------------
+
+ggplot(plasma, aes(x = observation)) + 
+  geom_histogram(binwidth = 10, fill = "pink", color = "black") +
+  labs(title = "Distribution of observation", x = "Observation", y = "Frequency")
+
+ggplot(plasma, aes(x=observation, y=method)) + geom_point(color="blue") +
+  labs(title="Scatter Plot of Observation vs. Method", x="Observations", y="Method")
+
+ggplot(plasma, aes(x=observation, y=subject)) + geom_point(color="blue") +
+  labs(title="Scatter Plot of Observation vs. Subject", x="Observation", y="Subject")
+
+ggplot(plasma, aes(x=method, y=observation)) + geom_boxplot() + 
+  labs(title="Boxplot of Method and Observation", x="Method", y="Observation")
+
+#observation from boxplot: Nadler method observation are higher. also has an outlier. 
+#Observations histogram implies normality
+
+```
+
+# (b):  
+
+```{r}
+# Split the data by subject to obtain correlation between them
+nadler <- plasma[plasma$method == "Nadler", "observation"]
+hurley <- plasma[plasma$method == "Hurley", "observation"]
+
+point_est <- cor(nadler, hurley)
+point_est
+
+```
+
+# (c): 
+
+```{r}
+# Ensure both vectors are of the same length for calculating bootstrap estimates 
+min_length <- min(length(nadler), length(hurley))
+#min_length
+nadler <- nadler[1:min_length]
+hurley <- hurley[1:min_length]
+
+# Number of bootstrap samples, B = 1000
+B <- 1000
+bootstrap_cor <- numeric(B)#Initialize a vector of zeroes of size 1000 for replication
+#bootstrap_cor
+
+
+#Bootstrap from scratch
+for (i in 1:B) {
+  # Generate bootstrap sample indices
+  indices <- sample(1:min_length, min_length, replace = TRUE)
+  
+  # Calculate correlation for the bootstrap sample for comparison
+  bootstrap_cor[i] <- cor(nadler[indices], hurley[indices])
+}
+
+#Bias = mean - correaltion
+bias_est <- mean(bootstrap_cor) - point_est
+cat("Bias =", bias_est, "\n")
+
+#Standard error
+se_est <- sd(bootstrap_cor)
+cat("Standard Error = ", se_est, "\n")
+
+#95% confidence interval using the percentile method
+ci_lower <- quantile(bootstrap_cor, 0.025)
+ci_upper <- quantile(bootstrap_cor, 0.975)
+cat("95% CI: [",ci_lower, ",", ci_upper,"]")
+
+
+```
+
+#(d): 
+
+```{r}
+
+# Define a function to calculate the correlation
+cor_func <- function(data, indices) {
+  data_updated <- data[indices, ]
+  return(cor(data_updated$nadler, data_updated$hurley))
+}
+
+# Combine the data into a data frame
+data_method <- data.frame(nadler = nadler, hurley = hurley)
+
+# Perform bootstrapping
+results_bootstrap <- boot(data_method, statistic = cor_func, R = 1000)
+results_bootstrap
+
+# Calculate 95% confidence interval
+ci_cor <- boot.ci(results_bootstrap, type = "perc")
+ci_cor
+
+```
+
+
+## Problem 2:
+```{r}
+# TAKEN COMPLETELY FROM MY Mini Project 3 (Problem 2)
+diab_data <- read.csv("C:/Users/lakpr/Documents/Working Directory STAT ML 6340/diabetes.csv")
+
+#Convert outcome to a factor variable because it is qualitative
+diab_data$Outcome <- as.factor(diab_data$Outcome)
+
+#-------------------STANDARDIZING ALL PREDICTORS--------------------------------
+# Function to standardize the training variable
+standardize <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+
+# Standardize all columns except "Outcome"
+standardize_Diab <- diab_data %>%
+  mutate(across(-Outcome, standardize))
+
+
+```
+
+
+# (a): 
+
+```{r}
+# TAKEN COMPLETELY FROM MY Mini Project 3 (Problem 2a and 2c)
+
+#set.seed(1)
+#Logistic regression model with all predictors
+diab_log_reg_all <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+                    SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+                        family = binomial, data = standardize_Diab)
+#summary(diab_log_reg_all)
+
+# Define a cost function for error rate
+cost_loocv <- function(r, pi = 0) mean(abs(r - pi) > 0.5)
+
+# Perform LOOCV using the boot package
+cv_error_new <- cv.glm(standardize_Diab, diab_log_reg_all, cost = cost_loocv, 
+                       K = nrow(standardize_Diab))
+
+# Calculate the misclassification error rate
+test_error_rate <- cv_error_new$delta[1]
+cat("Test Error Rate using LOOCV:", test_error_rate, "\n")
+
+```
+
+# (b): 
+```{r}
+# Set response and predictor matrices. The design matrix X includes 1's in the 
+# first column. We consider the predictor matrix without these 1's
+y_resp <- standardize_Diab$Outcome   
+x_pred <- model.matrix(Outcome ~ ., standardize_Diab)[, -1]
+
+# Define a grid of lambda values
+grid <- 10^seq(10, -2, length = 100)
+
+# Fit ridge regression model for each lambda (penalty parameter) on the grid above.
+ridge_reg_diab_all <- glmnet(x_pred, y_resp, alpha = 0, lambda = grid, 
+                             family = "binomial")
+
+# Perform LOOCV to find the optimal/best lambda 
+loocv_ridge <- cv.glmnet(x_pred, y_resp, alpha = 0, nfolds = nrow(standardize_Diab), 
+                         lambda = grid, family = "binomial", type.measure = "class")
+
+# Penalty parameter is the minimum value of the lambdas
+penalty_par <- loocv_ridge$lambda.min
+penalty_par
+
+# Fit the ridge regression model with the optimal lambda to help calculate 
+# the test MSE for the best lambda 
+ridge_reg_diab <- glmnet(x_pred, y_resp, alpha = 0, lambda = penalty_par, 
+                         family = "binomial")
+
+#Same method followed as in previous mini projects
+predictions <- predict(ridge_reg_diab, newx = x_pred, type = "response")
+predicted_classes <- ifelse(predictions > 0.5, "1", "0")
+test_error_rate <- mean(predicted_classes != y_resp)
+cat("Test MSE using Ridge Regression:", test_error_rate, "\n")
+
+```
+
+
+# (c):  
+```{r}
+# Fit lasso model for each lambda (penalty parameter) on the grid created in (b) 
+lasso_diab_all <- glmnet(x_pred, y_resp, alpha = 1, lambda = grid, 
+                         family = "binomial")
+
+# Perform LOOCV to find the optimal lambda for the lasso method
+loocv_lasso <- cv.glmnet(x_pred, y_resp, alpha = 1, nfolds = nrow(standardize_Diab), 
+                         lambda = grid, family = "binomial", type.measure = "class")
+
+# Best lambda
+penalty_par_lasso<- loocv_lasso$lambda.min
+penalty_par_lasso
+
+# Fit the ridge regression model with the best lambda to obtain test MSE
+lasso_diab <- glmnet(x_pred, y_resp, alpha = 1, lambda = penalty_par, 
+                     family = "binomial")
+
+predictions <- predict(lasso_diab, newx = x_pred, type = "response")
+predicted_classes <- ifelse(predictions > 0.5, "1", "0")
+test_error_rate <- mean(predicted_classes != y_resp)
+cat("Test Error Rate using Ridge Regression:", test_error_rate, "\n")
+
+
+```
+
+
+
+## Problem 3: 
+```{r}
+# TAKEN COMPLETELY FROM MY Mini Project 2 (Problem 2a and 2c)
+
+#Read the data and convert qualitative variables 'day' and 'month' to factors
+trainforest <- read.csv("C:/Users/lakpr/Documents/Working Directory STAT ML 6340/forestfires.csv")
+
+trainforest$day <- as.factor(trainforest$day)
+trainforest$month <- as.factor(trainforest$month)
+
+#transformation of area variable
+trainforest$area_new <- log(trainforest$area + 1)
+
+#sum(is.na(trainforest))
+
+```
+
+
+# (a): 
+```{r}
+train_ctrl <- trainControl(method = "LOOCV")
+
+# Train the regression model using the train function defined above
+multi_lm_forest <- train(area_new ~ temp + X + Y + month  + DMC + DC + RH + ISI + 
+                           day + FFMC + wind + rain , data = trainforest, 
+                         method = "lm", trControl = train_ctrl)
+summary(multi_lm_forest)
+
+# Calculate the test MSE = Root MSE * Root MSE
+test_mse <- multi_lm_forest$results$RMSE^2
+test_mse
+
+#adjusted R^2 = 0.02202
+
+```
+
+# (b): 
+
+```{r}
+# Total number of predictors in the data = number of columns - area - area_new
+totpred <- ncol(trainforest) - 2  
+totpred
+
+# Fit the full model with best subset selection method using 'regsubsets' function.
+fit_full <- regsubsets(area_new ~ temp + X + Y + month  + DMC + DC + RH + ISI + 
+                day + FFMC + wind + rain , data = trainforest, nvmax = totpred)
+
+# Get the maximum adjusted R^2
+summary_full <- summary(fit_full)
+summary_full$adjr2        # All the adjusted R^2 values for each predictor
+max(summary_full$adjr2)   # Finds the maximum Adj. R^2 value from the above list
+max_adjr2 <- which.max(summary_full$adjr2)
+
+# Print the coefficients of all predictors selected in the best subset selection model.
+print(coef(fit_full, max_adjr2))
+
+#dropped predictors: y, month(JF AM JA  N ), RH, ISI, FFMC,rain, day(M WTF S)
+
+# Since we are unable to dro qualitative predictors like specific months or days, 
+# make a new dataset that splits all the levels/ classes of a categorical variable.
+
+ff_split <- data.frame(model.matrix(~ . -1, data = trainforest))
+str(ff_split)
+
+# Fit the new model with the dropped predictors
+loocv_best <- train(area_new ~ temp + X + monthdec + monthjun + monthmar + 
+                      monthoct + monthsep + DMC + DC + daysat + daytue + wind, 
+                    data = ff_split, method = "lm", trControl = train_ctrl)
+
+# Obtain the test MSE of the above best model. Test MSE = (Root MSE)^2
+loocv_best$results$RMSE^2
+
+```
+
+
+# (c): 
+
+```{r}
+# Fit the full model with forward stepwise selection method using 'regsubsets' 
+# function with method "forward"
+fit_full_forward <- regsubsets(area_new ~ temp + X + Y + month  + DMC + DC + 
+                                 RH + ISI + day + FFMC + wind + rain , 
+                        data = trainforest, nvmax = totpred, method = "forward")
+
+# Get the maximum adjusted R^2 just like we did in best subset selection
+summary_full_forward <- summary(fit_full_forward)
+summary_full_forward$adjr2
+max(summary_full_forward$adjr2)
+max_adjr2_forw <- which.max(summary_full_forward$adjr2) 
+
+# Print the coefficients of all predictors selected in the forward stepwise 
+# selection model.
+print(coef(fit_full_forward, max_adjr2_forw))
+
+#dropped predictors: y, month(J MAMJJA  N ), RH, ISI, FFMC,rain, day(M WTF S)
+
+# Fit the new model with the dropped predictors
+loocv_best_forw <- train(area_new ~ temp + X + monthdec + monthfeb + monthoct 
+                         + monthsep + DMC + DC + daysat + daytue +  wind, 
+                         data = ff_split, method = "lm", trControl = train_ctrl)
+
+# Get the test MSE of the model
+loocv_best_forw$results$RMSE^2
+
+```
+
+# (d): 
+
+```{r}
+# Fit the full model with backward stepwise selection method using 'regsubsets' 
+# function with method "backward"
+fit_full_backward <- regsubsets(area_new ~ temp + X + Y + month  + DMC + DC + RH 
+                      + ISI + day + FFMC + wind + rain , data = trainforest, 
+                      nvmax = totpred, method = "backward")
+
+# Get the maximum adjusted R^2 just like we did in the above two methods
+summary_full_backward <- summary(fit_full_backward)
+summary_full_backward$adjr2
+max(summary_full_backward$adjr2)
+max_adjr2_back <- which.max(summary_full_backward$adjr2) 
+
+# Print the coefficients of all predictors selected in the backward stepwise 
+# selection model.
+print(coef(fit_full_backward, max_adjr2_back))
+
+#dropped predicctors: y, month(JF AM JA  N ), RH, ISI, FFMC,rain, day(M WTF S)
+
+# Fit the new model with the dropped predictors
+loocv_best_back <- train(area_new ~ temp + X + monthdec + monthjun + monthmar + 
+                        monthoct + monthsep + DMC + DC + daysat + daytue + wind, 
+                         data = ff_split, method = "lm", trControl = train_ctrl)
+
+# Compute test MSE
+loocv_best_back$results$RMSE^2 
+ 
+# Notice that the results of this method exactly match the best subset selection method.
+ 
+```
+
+
+# (e): 
+
+```{r}
+# Set response and predictor matrices. The design matrix X includes 1's in the 
+# first column. We consider the predictor matrix without these 1's
+y_resp_ff <- trainforest$area_new   
+x_pred_ff <- model.matrix(area_new ~ temp + X + Y + month  + DMC + DC + RH + ISI + 
+                day + FFMC + wind + rain, trainforest)[, -1]
+
+# Fit ridge regression model for each lambda (penalty parameter) on the grid.
+ridge_reg_ff_all <- glmnet(x_pred_ff, y_resp_ff, alpha = 0, lambda = grid)
+
+# Perform LOOCV to find the penalty parameter lambda
+loocv_ridge_ff <- cv.glmnet(x_pred_ff, y_resp_ff, alpha = 0, nfolds = nrow(trainforest), 
+                         lambda = grid, grouped = FALSE, type.measure = "mse")
+
+# Penalty parameter = minimum value of lambda
+penalty_par_ff <- loocv_ridge_ff$lambda.min
+penalty_par_ff
+
+# Calculate test MSE using built-in function "cvm" which stands for 
+# Cross Validation MSE which is very easy to calculate (it is included in the 
+# glmnet package)
+test_err_new <- min(loocv_ridge_ff$cvm)
+test_err_new 
+
+
+```
+
+# (f): 
+
+```{r}
+# Fit lasso model for each lambda (penalty parameter) on the grid.
+lasso_ff_all <- glmnet(x_pred_ff, y_resp_ff, alpha = 1, lambda = grid)
+
+# Perform LOOCV to find the best lambda from the grid
+loocv_lasso_ff <- cv.glmnet(x_pred_ff, y_resp_ff, alpha = 1, nfolds = nrow(trainforest), 
+                         lambda = grid, grouped = FALSE, type.measure = "mse")
+
+# Best lambda
+penalty_par_ff_lasso <- loocv_lasso_ff$lambda.min
+penalty_par_ff_lasso
+
+# Calculate test MSE using built-in function "cvm"
+test_err_new_lasso <- min(loocv_lasso_ff$cvm)
+test_err_new_lasso
+ 
+ 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
