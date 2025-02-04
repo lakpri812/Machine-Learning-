@@ -1,0 +1,496 @@
+---
+title: "Section 2: Code"
+output: pdf_document
+geometry: margin = 0.5in
+header-includes:
+  - \usepackage{setspace}
+  - \setstretch{1.2}
+  - \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Load Required Libraries
+
+library(ggplot2)
+library(glmnet)
+library(plyr)
+library(dplyr)
+library(caret)
+library(ISLR)
+library(reshape2)
+library(pls)
+
+set.seed(1)
+
+```
+
+## Problem 1:
+
+# (a):
+
+```{r}
+nyt_train <- read.csv("C:/Users/lakpr/Documents/Working Directory STAT ML 6340/nyt.train.csv")
+nyt_test <- read.csv("C:/Users/lakpr/Documents/Working Directory STAT ML 6340/nyt.test.csv")
+
+#PCA for the training data
+pca_train <- prcomp(nyt_train[,-1])
+nyt_latent_sem <- pca_train$rotation
+#nyt_latent_sem
+
+#FIRST PCAs
+#music components
+signif(sort(nyt_latent_sem[,1], decreasing = TRUE)[1:30], 2)
+
+#art components
+signif(sort(nyt_latent_sem[,1], decreasing = FALSE)[1:30], 2)
+
+#SECOND PCAs
+#music components
+signif(sort(nyt_latent_sem[,2], decreasing = TRUE)[1:30], 2)
+
+#art components
+signif(sort(nyt_latent_sem[,2], decreasing = FALSE)[1:30], 2)
+
+plot(pca_train$x[, 1:2], 
+     pch = ifelse(nyt_train[, "class.labels"] == "music", "m", "a"), 
+     col = ifelse(nyt_train[, "class.labels"] == "music", "blue", "red"), 
+     main = "Projection of the Times stories on to the first two principal components. ")
+
+options(scipen = 999)
+
+# Compute the proportion of variance explained (PVE) 
+nyt_var <- pca_train$sdev^2
+pve_nyt <- nyt_var/sum(nyt_var)
+pve_nyt
+cumsum(pve_nyt)
+
+#SCREE PLOT for PVE
+plot(pve_nyt, xlab = "Principal Component", ylab = "Proportion of Variance Explained", 
+     ylim = c(0,1), type = 'b', main = "Scree Plot")
+
+```
+
+# (c): 
+
+```{r}
+#extract scores of first two PCs
+pca_train_score12 <- pca_train$x[, 1:2]
+#pca_train_score12
+
+# Put the scores of the first two PCs into a data frame to use as predictor 
+#variables for logistic regression
+pca_train_12 <- data.frame(PC1 = pca_train_score12[,1], PC2 = pca_train_score12[,2], 
+            class = as.factor(ifelse(nyt_train$class.labels == "music", 1, 0)))
+
+# Fit the logistic regression model on the first two PCs as the predictors and 
+#the class of a story(art or music) as the response.
+lg_model <- glm(class ~ PC1 + PC2, data = pca_train_12, family = binomial)
+summary(lg_model)
+
+# Mke predictions on the training data
+pca_train_pred <- predict(lg_model, type = "response")
+train_pred_class <- ifelse(pca_train_pred > 0.5, 1, 0)
+
+# Evaluate the model
+table(Predicted = train_pred_class, Actual = pca_train_12$class)
+accuracy <- mean(train_pred_class == pca_train_12$class)
+print(paste("Training Error rate:", accuracy))
+
+# Plot the PCA scores with the decision boundary same as done in (a) above
+plot(pca_train_score12[,1], pca_train_score12[,2], 
+     col = ifelse(pca_train_12$class == 1, "blue", "red"), 
+     pch = ifelse(pca_train_12$class == 1, "m", "a"), xlab = "PC1", ylab = "PC2", 
+     main = "Decision boundary for plot in 1(a)")
+
+# Create a grid of values to add the decisin boundary as a contour plot using 
+#the "contour" function. Set the range of the axes of the grid as minimum and 
+#maximum values of the first two PCs
+x_min <- min(pca_train_score12[,1]) - 1
+x_max <- max(pca_train_score12[,1]) + 1
+y_min <- min(pca_train_score12[,2]) - 1
+y_max <- max(pca_train_score12[,2]) + 1
+
+# Build the grid
+grid <- expand.grid(PC1 = seq(x_min, x_max, length.out = 100), 
+                    PC2 = seq(y_min, y_max, length.out = 100))
+
+# Make predictions on the grid using the logistic regression model to predict 
+#the probability of each data point on the grid belonging to either of the 
+#classes. Here, music is class 1 and art is class 0.
+grid_pred <- predict(lg_model, newdata = grid, type = "response")
+grid_pred_class <- ifelse(grid_pred > 0.5, 1, 0)
+
+# Add the decision boundary to the above plot
+contour(seq(x_min, x_max, length.out = 100), seq(y_min, y_max, length.out = 100), 
+        matrix(grid_pred_class, 100, 100), add = TRUE, drawlabels = FALSE, 
+        levels = 0.5, col = "black")
+
+```
+
+# (d):
+
+```{r}
+# Perform predictions on the test data using the same PCA model fitted on the 
+#training data above
+pca_test_scores <- predict(pca_train, newdata = nyt_test[,-1])
+pca_test_scores <- pca_test_scores[, 1:2]  # Extract the scores for the first two PCs
+
+# Prepare the test data for prediction just like (c) but use test data and 
+#corresponding scores
+pca_test_data <- data.frame(PC1 = pca_test_scores[,1], PC2 = pca_test_scores[,2], 
+              class = as.factor(ifelse(nyt_test$class.labels == "music", 1, 0)))
+
+# Make predictions on the test data using the same logistic regression model in (c)
+pca_test_pred <- predict(lg_model, newdata = pca_test_data, type = "response")
+test_pred_class <- ifelse(pca_test_pred > 0.5, 1, 0)
+
+# Compute the test error rate = 1 - accuracy
+pca_test_acc <- mean(test_pred_class == pca_test_data$class)
+pca_test_err <- 1 - pca_test_acc
+print(paste("Test Error Rate:", pca_test_err))
+
+# Compute class-specific error rates using the 'caret' library and 
+#obtain the confusion matrix
+pca_cm <- confusionMatrix(as.factor(test_pred_class), pca_test_data$class)
+pca_cm
+
+```
+
+## Problem 2:
+
+```{r}
+Hitters <- na.omit(Hitters)
+players <- row.names(Hitters) #names of beaseball players
+str(Hitters)
+
+#-------------------Dummy representation-------------------------------------------
+
+#Creating dummy variables for categorical variables: League, Division, and 
+# NewLeague, dropping the reference category to avoid multicollinearity issue
+dummies_league <- model.matrix(~ League, data = Hitters)[, -1]
+dummies_division <- model.matrix(~ Division, data = Hitters)[, -1]
+dummies_newleague <- model.matrix(~ NewLeague, data = Hitters)[, -1]
+
+#Combine the dummy variables with the original Hitters dataset excluding the 
+# original categorical variables and use this for all analysis further.
+
+Hitters_dummies <- cbind(Hitters[, !names(Hitters) %in% 
+                  c("League", "Division", "NewLeague")],dummies_league, 
+                  dummies_division, dummies_newleague)
+
+# Inspect the new dataset #league and newleague N1 A0 division W1 E0
+str(Hitters_dummies)
+
+```
+
+# (a): 
+
+```{r}
+# Get mean and sd to check for scales of variables
+apply(Hitters_dummies, 2, mean)
+apply(Hitters_dummies, 2, sd)
+
+# Scales vary so standardization required.
+
+```
+
+# (b): 
+ 
+```{r}
+#PCA
+pca_hit <- prcomp(Hitters_dummies, center = T, scale = T) 
+pca_hit$rotation
+
+# Set the scientific penalty option to a high value to get pve's in decimal 
+#notation rather than scientific for convenience in interpretation
+options(scipen = 999)
+
+# Compute the proportion of variance explained (PVE) 
+pc_var <- pca_hit$sdev^2
+pve_hit <- pc_var/sum(pc_var)
+pve_hit
+cumsum(pve_hit)
+
+#SCREE PLOT for PVE
+plot(pve_hit, xlab = "Principal Component", ylab = "Proportion of Variance Explained", 
+     ylim = c(0,1), type = 'b')
+
+```
+
+# (c):
+
+```{r}
+# Loadings matrix gives the correlations of the original variables with the 
+#first two PCs
+loadings_hitters <- pca_hit$rotation
+
+# Correlation of the standardized variables with first two PCs are obtained from 
+#the values in the rotation matrix 
+corr_pc1 <- loadings_hitters[, 1]
+corr_pc1
+
+corr_pc2 <- loadings_hitters[, 2]
+corr_pc2
+
+# Creating a scatter plot with the variables and the correlations of the first 
+#two PCs above helps visualize the above correlations
+
+# Create a data frame for making the scatter plot with the PCs
+corr_df <- data.frame(Variable = rownames(loadings_hitters), 
+                              PC1 = corr_pc1, PC2 = corr_pc2)
+
+# Plot the correlations as a scatter plot
+ggplot(corr_df, aes(x = PC1, y = PC2, label = Variable)) +
+  geom_point() +
+  geom_text(vjust = -0.5, hjust = 0.5) +
+  labs(title = "Scatter Plot",
+       x = "PC 1",
+       y = "PC 2") +
+  theme_minimal()
+
+#Scatter plot is not easy to interpret so use a barplot.
+
+#Melt data frame to reshape into long format for plotting a bar plot so that the bars are grouped by the PCs.
+corr_melted <- melt(corr_df, id.vars = "Variable", 
+                    variable.name = "PrincipalComponent", 
+                    value.name = "Correlation")
+
+ggplot(corr_melted, aes(x = Variable, y = Correlation, fill = PrincipalComponent)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Bar Plot",
+       x = "Variable",
+       y = "Correlation") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Create the biplot 
+biplot(pca_hit, scale = 0) 
+
+
+```
+
+## Problem 3: 
+
+# (c): 
+
+```{r}
+# Identify the numeric variables (excluding the dummy variables)
+numeric_vars <- names(Hitters_dummies)[!names(Hitters_dummies) %in% c("dummies_league", "dummies_division", "dummies_newleague")]
+
+# Standardize the numeric variables
+Hitters_std <- Hitters_dummies
+Hitters_std[numeric_vars] <- scale(Hitters_dummies[numeric_vars])
+str(Hitters_std)
+
+# Compute the distance matrix using Euclidean distance
+dist_matrix <- dist(Hitters_std, method = "euclidean")
+
+# Perform hierarchical clustering using complete linkage
+hc_complete <- hclust(dist_matrix, method = "complete")
+
+# Plot the dendrogram
+plot(hc_complete, main = "Hierarchical Clustering Dendrogram (Complete Linkage)",
+     xlab = "Player", sub = "", cex = 0.5)
+
+# Cut the dendrogram at a height that results in two distinct clusters
+clusters <- cutree(hc_complete, k = 2)
+
+# Add cluster assignments to the original data. We do means on unstandardized 
+#data for easy interpretation 
+Hitters_dummies$Cluster <- clusters
+Hitters_std$Cluster <- clusters
+
+# Display the cluster assignments
+table(clusters)
+#c1 contains 226 players and c2 contains 37 players. 
+
+# Summarize the cluster-specific means of the variables
+c_means <- aggregate(Hitters_dummies[, numeric_vars], 
+                     by = list(Cluster = clusters), mean)
+c_means
+
+c_means_std <- aggregate(Hitters_std[, numeric_vars], 
+                     by = list(Cluster = clusters), mean)
+c_means_std
+
+# Summarize the mean salaries of the players in the two clusters
+mean_sal <- aggregate(Salary ~ Cluster, data = Hitters_dummies, mean)
+mean_sal
+
+mean_sal_std <- aggregate(Salary ~ Cluster, data = Hitters_std, mean)
+mean_sal_std
+
+```
+
+# (d): 
+
+```{r}
+# Apply K-means clustering with K = 2
+kmeans_result_std <- kmeans(Hitters_std[numeric_vars], centers = 2, nstart = 20)
+kmeans_result <- kmeans(Hitters_dummies[numeric_vars], centers = 2, nstart = 20)
+
+# Add the cluster assignments to the original data
+Hitters_std$cluster <- kmeans_result$cluster
+
+# Calculate the cluster-specific means of the variables
+cluster_means_std_k <- aggregate(Hitters_std[numeric_vars], 
+                    by = list(cluster = Hitters_std$cluster), FUN = mean)
+cluster_means_std_k
+
+# Calculate the mean salaries of the players in the two clusters
+mean_sal_std_k <- aggregate(Hitters_std$Salary, 
+                  by = list(cluster = Hitters_std$cluster), FUN = mean)
+colnames(mean_sal_std_k) <- c("cluster", "mean_salary")
+mean_sal_std_k
+
+#---------------UNSTANDARDIZED VERSION FOR INTERPETATION------------------------
+# Add the cluster assignments to the original data
+Hitters_dummies$cluster <- kmeans_result$cluster
+
+# Calculate the cluster-specific means of the variables
+cluster_means_k <- aggregate(Hitters_dummies[numeric_vars], 
+                    by = list(cluster = Hitters_dummies$cluster), FUN = mean)
+cluster_means_k
+
+# Calculate the mean salaries of the players in the two clusters 
+#unstandardized for easy interpetation
+mean_sal_k <- aggregate(Hitters_dummies$Salary, 
+                  by = list(cluster = Hitters_dummies$cluster), FUN = mean)
+colnames(mean_sal_k) <- c("cluster", "mean_salary")
+mean_sal_k
+
+```
+
+
+## Problem 4: 
+
+```{r}
+#transformation of Salary variable to Log(Salary) as specified in the question
+Hitters_dummies$salary_new <- log(Hitters_dummies$Salary)
+str(Hitters_dummies)
+
+```
+
+# (a):
+
+```{r}
+train_ctrl <- trainControl(method = "LOOCV")
+
+# Train the regression model using the train function defined above
+multi_lm_hitters <- train(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, 
+                  method = "lm", trControl = train_ctrl)
+summary(multi_lm_hitters)
+
+# Calculate the test MSE = Root MSE * Root MSE
+test_mse <- multi_lm_hitters$results$RMSE^2
+test_mse
+
+```
+
+# (b): 
+
+```{r}
+#PCR model to choose optimal M using LOOCV
+pcr_fit <- pcr(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, scale = TRUE, 
+               validation = "LOO", center = TRUE)
+summary(pcr_fit)
+
+MSEP(pcr_fit) #MSE of prediction
+sqrt(MSEP(pcr_fit)$val[1, 1,]) #RMSE for first component
+
+#Identify the number of components that minimize the MSEP
+best_m_pcr <- which.min(MSEP(pcr_fit)$val[1, 1,]) 
+best_m_pcr
+
+#Fit pcr model with M = 16 to get corresponding test MSE
+pcr_fit_best <- pcr(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, scale = TRUE, 
+                  validation = "LOO", center = TRUE, ncomp = best_m_pcr)
+summary(pcr_fit_best)
+
+#Test MSE
+MSEP(pcr_fit_best)$val[1, 1, best_m_pcr]
+
+```
+
+# (c):
+
+```{r}
+#PCR model to choose optimal M using LOOCV
+pls_fit <- plsr(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, scale = TRUE, 
+               validation = "LOO", center = TRUE)
+summary(pls_fit)
+
+MSEP(pls_fit) #MSE of prediction
+sqrt(MSEP(pls_fit)$val[1, 1,]) #RMSE for first component
+
+# Identify the number of components that minimize the MSEP
+best_m_pls <- which.min(MSEP(pls_fit)$val[1, 1,]) 
+best_m_pls
+
+#Fit pla model with M = 12 to get corresponding test MSE
+pls_fit_best <- pcr(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, scale = TRUE, 
+                  validation = "LOO", center = TRUE, ncomp = best_m_pls)
+summary(pls_fit_best)
+
+#Test MSE
+MSEP(pls_fit_best)$val[1, 1, best_m_pls]
+
+```
+
+# (d): 
+
+```{r}
+# Set response and predictor matrices. The design matrix X includes 1's in the 
+# first column. We consider the predictor matrix without these 1's
+y_resp <- Hitters_dummies$salary_new
+x_pred <- model.matrix(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies)[, -1]
+
+# Define a grid of lambda values
+grid <- 10^seq(10, -2, length = 100)
+
+# Fit ridge regression model for each lambda (penalty parameter) on the grid.
+ridge_reg_hitters <- glmnet(x_pred, y_resp, alpha = 0, lambda = grid)
+
+# Perform LOOCV to find the penalty parameter lambda
+loocv_ridge_hitters <- cv.glmnet(x_pred, y_resp, alpha = 0, nfolds = nrow(Hitters), 
+                         lambda = grid, grouped = FALSE, type.measure = "mse")
+
+# Penalty parameter = minimum value of lambda
+penalty_par_hitters <- loocv_ridge_hitters$lambda.min
+penalty_par_hitters
+
+# Calculate test MSE using built-in function "cvm" which stands for 
+# Cross Validation MSE which is very easy to calculate (it is included in the 
+# glmnet package)
+test_err_new <- min(loocv_ridge_hitters$cvm)
+test_err_new 
+
+```
+
+
+
+
+
+
