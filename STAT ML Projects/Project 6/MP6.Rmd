@@ -1,0 +1,314 @@
+---
+title: "Section 2: Code"
+output: pdf_document
+geometry: margin = 0.5in
+header-includes:
+  - \usepackage{setspace}
+  - \setstretch{1.2}
+  - \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Load Required Libraries
+
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(caret)
+library(ISLR)
+library(pls)
+library(tree)
+library(randomForest)
+library(gbm)
+
+
+set.seed(1)
+
+```
+
+## Problem 1: 
+
+```{r}
+
+Hitters <- na.omit(Hitters)
+players <- row.names(Hitters) #names of baseball players
+
+#-------------------Dummy representation-------------------------------------------
+
+#Creating dummy variables for categorical variables: League, Division, and 
+# NewLeague, dropping the reference category to avoid multicollinearity issue
+dummies_league <- model.matrix(~ League, data = Hitters)[, -1]
+dummies_division <- model.matrix(~ Division, data = Hitters)[, -1]
+dummies_newleague <- model.matrix(~ NewLeague, data = Hitters)[, -1]
+
+#Combine the dummy variables with the original Hitters dataset excluding the 
+# original categorical variables and use this for all analysis further.
+
+Hitters_dummies <- cbind(Hitters[, !names(Hitters) %in% 
+                  c("League", "Division", "NewLeague")],dummies_league, 
+                  dummies_division, dummies_newleague)
+
+# Inspect the new dataset #league and newleague N1 A0 division W1 E0
+#str(Hitters_dummies)
+
+
+#transformation of Salary variable to Log(Salary) as specified in the question
+Hitters_dummies$salary_new <- log(Hitters_dummies$Salary)
+str(Hitters_dummies)
+
+ncol(Hitters_dummies)-1
+ncol(Hitters)-1
+
+```
+
+# (a): 
+
+```{r}
+#Fit the decision tree
+tree_hitters <- tree(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies)
+
+#Display tree and see summary to determine number of terminal nodes. 
+tree_hitters 
+summary(tree_hitters)
+
+# Here, # of terminal nodes = 9. So we display the tree graphically.
+plot(tree_hitters)
+text(tree_hitters, pretty = 0, cex = 0.7)
+
+# Test MSE -- Define a function to calculate test MSE
+loocv_mse_tree <- function(data, formula) {
+  n_obs_hitters <- nrow(data)
+  testmse <- numeric(n_obs_hitters)
+  
+#Run the loop depending on the number of observations in the dataset. Each iteration leaves one observation out as the test set and the remaining observations are the training set-- definition of LOOCV.
+  for (i in 1:n_obs_hitters) {
+    #LOOCV 
+    train_data_hitters <- data[-i, ]
+    test_data_hitters <- data[i, , drop = FALSE]
+    
+    #fit a regression tree model and use it to predict response for the test data
+    fit_model <- tree(formula, data = train_data_hitters)
+    pred <- predict(fit_model, newdata = test_data_hitters)
+    
+    #MSE = square of difference between actual response of test data and prediction made above.
+    testmse[i] <- (test_data_hitters$salary_new - pred)^2
+  }
+  
+  #Mean of errors
+  mean(testmse)
+}
+
+#Call the above defined function.
+tree_mse <- loocv_mse_tree(Hitters_dummies, salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks + Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + PutOuts + Assists + Errors + dummies_division + dummies_league + dummies_newleague)
+tree_mse
+
+```
+
+# (b):  
+
+```{r}
+
+# Perform LOOCV to determine optimal tree size
+pruned_hitters <- cv.tree(tree_hitters, K = nrow(Hitters_dummies))  # LOOCV
+pruned_hitters
+
+# Identify the optimal tree size based on minimum deviance
+optimal_size <- pruned_hitters$size[which.min(pruned_hitters$dev)]
+optimal_size
+
+# Optimal size of pruned tree using LOOCV = 9 = number of terminal nodes. 
+#Therefore, pruning is not useful.
+
+# Prune the tree to the optimal size
+pruned_best_hitters <- prune.tree(tree_hitters, best = optimal_size)
+pruned_best_hitters
+summary(pruned_best_hitters)
+
+# Plot the pruned tree and add labels
+plot(pruned_best_hitters, type = "uniform")  # Nodes spaced uniformly
+text(pruned_best_hitters, pretty = 0, cex = 0.7)
+
+# Function to compute LOOCV Test MSE for the pruned tree
+loocv_mse_tree <- function(data, formula, optimal_size) {
+  n_obs <- nrow(data)
+  test_mse <- numeric(n_obs)
+  
+  for (i in 1:n_obs) {
+    train_data <- data[-i, ]
+    test_data <- data[i, , drop = FALSE]
+    
+    # Fit a regression tree on the training set
+    fit_model <- tree(formula, data = train_data)
+    
+    # Prune the tree to the optimal size
+    pruned_model <- prune.tree(fit_model, best = optimal_size)
+    
+    # Predict response for the test observation
+    pred_pruned <- predict(pruned_model, newdata = test_data)
+    
+    # Compute MSE
+    test_mse[i] <- (test_data$salary_new - pred_pruned)^2
+  }
+  mean(test_mse)
+}
+
+# Compute the LOOCV Test MSE for the pruned tree
+pruned_mse <- loocv_mse_tree(Hitters_dummies, salary_new ~ AtBat + Hits + 
+            HmRun + Runs + RBI + Walks + Years + CAtBat + CHits + CHmRun + 
+            CRuns + CRBI + CWalks + PutOuts + Assists + Errors + 
+          dummies_division + dummies_league + dummies_newleague, optimal_size)
+
+#Test MSE of pruned tree
+pruned_mse
+
+
+
+```
+
+
+
+# (c): 
+ 
+```{r}
+bag_hitters <- randomForest(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, mtry = 19 , ntree = 1000, importance = TRUE)
+bag_hitters
+
+# Test MSE -- Define a function to calculate test MSE
+loocv_mse_bagging <- function(data, formula, mtry, ntree) {
+  n_obs_hitters <- nrow(data)
+  testmse_bagging <- numeric(n_obs_hitters)
+  
+#Run the loop depending on the number of observations in the dataset. Each iteration leaves one observation out as the test set and the remaining observations are the training set-- definition of LOOCV.
+  for (i in 1:n_obs_hitters) {
+    #LOOCV 
+    train_data_hitters <- data[-i, ]
+    test_data_hitters <- data[i, , drop = FALSE]
+    
+    #fit a regression tree model and use it to predict response for the test data
+    fit_model <-randomForest(formula, data = train_data_hitters)
+    pred <- predict(fit_model, newdata = test_data_hitters)
+    
+    #MSE = square of difference between actual response of test data and prediction made above.
+    testmse_bagging[i] <- (test_data_hitters$salary_new - pred)^2
+  }
+  
+  #Mean of errors
+  mean(testmse_bagging)
+}
+
+#Call the above defined function and calculate the test MSE.
+bagging_mse <- loocv_mse_bagging(Hitters_dummies, salary_new ~ AtBat + Hits + 
+                                   HmRun + Runs + RBI + Walks + Years + CAtBat +
+                                   CHits + CHmRun + CRuns + CRBI + CWalks + 
+                                   PutOuts + Assists + Errors + dummies_division + 
+                                   dummies_league + dummies_newleague, 
+                                 mtry = 19, ntree = 1000)
+bagging_mse
+
+# Display the important predictors and plot them to see which ones are indeed important.
+imp_pred_bagging <- bag_hitters$importance
+imp_pred_bagging
+varImpPlot(bag_hitters)
+
+```
+# (d): 
+
+```{r}
+randFor_hitters <- randomForest(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, mtry = 19/3 , ntree = 1000, importance = TRUE)
+randFor_hitters
+
+# Test MSE -- Define a function to calculate test MSE
+loocv_mse_randfor <- function(data, formula, mtry, ntree) {
+  n_obs_hitters <- nrow(data)
+  testmse_bagging <- numeric(n_obs_hitters)
+  
+#Run the loop depending on the number of observations in the dataset. Each iteration leaves one observation out as the test set and the remaining observations are the training set-- definition of LOOCV.
+  for (i in 1:n_obs_hitters) {
+    #LOOCV 
+    train_data_hitters <- data[-i, ]
+    test_data_hitters <- data[i, , drop = FALSE]
+    
+    #fit a regression tree model and use it to predict response for the test data
+    fit_model <-randomForest(formula, data = train_data_hitters)
+    pred <- predict(fit_model, newdata = test_data_hitters)
+    
+    #MSE = square of difference between actual response of test data and prediction made above.
+    testmse_bagging[i] <- (test_data_hitters$salary_new - pred)^2
+  }
+  
+  #Mean of errors
+  mean(testmse_bagging)
+}
+
+#Call the above defined function and calculate the test MSE.
+randfor_mse <- loocv_mse_bagging(Hitters_dummies, salary_new ~ AtBat + Hits + 
+                                   HmRun + Runs + RBI + Walks + Years + CAtBat +
+                                   CHits + CHmRun + CRuns + CRBI + CWalks + 
+                                   PutOuts + Assists + Errors + dummies_division + 
+                                   dummies_league + dummies_newleague, 
+                                 mtry = 19/3, ntree = 1000)
+randfor_mse
+
+# Display the important predictors and plot them to see which ones are indeed important.
+imp_pred_randfor <- randFor_hitters$importance
+imp_pred_randfor
+varImpPlot(randFor_hitters)
+
+```
+
+# (e): 
+ 
+```{r}
+boosting_hitters <- gbm(salary_new ~ AtBat + Hits + HmRun + Runs + RBI + Walks +
+                  Years + CAtBat + CHits + CHmRun + CRuns + CRBI + CWalks + 
+                  PutOuts + Assists + Errors + dummies_division + dummies_league + 
+                  dummies_newleague, data = Hitters_dummies, distribution = "gaussian", n.trees = 1000, interaction.depth = 1, shrinkage = 0.01)
+summary(boosting_hitters)
+
+# Test MSE -- Define a function to calculate test MSE
+loocv_mse_boosting <- function(data, formula, n.trees, interaction.depth, shrinkage) {
+  n_obs_hitters <- nrow(data)
+  testmse_boosting <- numeric(n_obs_hitters)
+  
+#Run the loop depending on the number of observations in the dataset. Each iteration leaves one observation out as the test set and the remaining observations are the training set-- definition of LOOCV.
+  for (i in 1:n_obs_hitters) {
+    #LOOCV 
+    train_data_hitters <- data[-i, ]
+    test_data_hitters <- data[i, , drop = FALSE]
+    
+    #fit a regression tree model and use it to predict response for the test data
+    fit_model <-gbm(formula, data = train_data_hitters, distribution = "gaussian", n.trees = n.trees, interaction.depth = interaction.depth, shrinkage = shrinkage, verbose = FALSE)
+    pred <- predict(fit_model, newdata = test_data_hitters, n.trees = n.trees)
+    
+    #MSE = square of difference between actual response of test data and prediction made above.
+    testmse_boosting[i] <- (test_data_hitters$salary_new - pred)^2
+  }
+  
+  #Mean of errors
+  mean(testmse_boosting)
+}
+
+#Call the above defined function and calculate the test MSE.
+boosting_mse <- loocv_mse_boosting(Hitters_dummies, salary_new ~ AtBat + Hits + 
+                                   HmRun + Runs + RBI + Walks + Years + CAtBat +
+                                   CHits + CHmRun + CRuns + CRBI + CWalks + 
+                                   PutOuts + Assists + Errors + dummies_division + 
+                                   dummies_league + dummies_newleague, 
+                                 n.trees = 1000, interaction.depth = 1, shrinkage = 0.01)
+boosting_mse
+
+```
