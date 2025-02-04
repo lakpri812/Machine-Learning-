@@ -1,0 +1,403 @@
+---
+title: "Section 2: Code"
+output: pdf_document
+geometry: margin = 0.5in
+header-includes:
+  - \usepackage{setspace}
+  - \setstretch{1.2}
+  - \usepackage{amsmath}
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Load required libraries
+library(dplyr)
+library(pROC)
+library(boot)
+library(caret)
+library(class)
+library(MASS)
+library(e1071)
+
+```
+
+## Problem 1
+
+```{r}
+# Read the data
+diab_data <- read.csv("C:/Users/lakpr/Documents/Working Directory STAT ML 6340/diabetes.csv")
+
+summary(diab_data)
+
+# Check for missing values
+#sum(is.na(diab_data))
+
+#Convert outcome to a factor variable because it is qualitative
+diab_data$Outcome <- as.factor(diab_data$Outcome)
+table(diab_data$Outcome)
+
+#-------------------STANDARDIZING ALL PREDICTORS--------------------------------
+# Function to standardize the training variable
+standardize <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+
+# Standardize all columns except "Outcome"
+standardize_Diab <- diab_data %>%
+  mutate(across(-Outcome, standardize))
+
+# View the standardized data
+#standardize_Diab
+
+```
+
+# (a): 
+
+```{r}
+#Logistic regression model with all predictors
+diab_log_reg_good <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + BMI + DiabetesPedigreeFunction + Insulin + Age, family = binomial, data = standardize_Diab)
+#summary(diab_log_reg_good)
+
+# Since skin thickness has a high p-value, drop that predictor and this is 
+# our reasonably good model
+diab_log_reg_all <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + 
+                          Insulin + BMI + DiabetesPedigreeFunction + Age, 
+                        family = binomial, data = standardize_Diab)
+#summary(diab_log_reg_all)
+
+# Model with only significant predictors. Drop skin thickness, age and insulin
+diab_log_reg_drop3 <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + BMI +
+                            DiabetesPedigreeFunction , family = binomial, 
+                          data = standardize_Diab)
+#summary(diab_log_reg_drop3)
+
+# p-value is 0.92 > 0.05 which is high. Therefore, dropping skinthickness 
+#does not affect our model significantly.
+anova(diab_log_reg_all, diab_log_reg_good, test = "Chisq") 
+
+# p-value = 0.077 > 0.05 but still 0.077 < 0.1. So, we retain age and insulin 
+#because these might help in improving out model and predictions.
+anova(diab_log_reg_drop3, diab_log_reg_good, test = "Chisq")
+
+# p-value = 0.16 > 0.05 => predictors skin thickness, insulin and age are not  
+#very significant. But we still retain age and insulin from what we observed 
+#in the above anova test
+anova(diab_log_reg_drop3, diab_log_reg_all, test = "Chisq")
+
+```
+# (b): 
+
+```{r}
+#Use the coef function to obtain coefficient estimates of the reasonably good model.
+print(coef(diab_log_reg_good))
+
+#Get the probability of the predicted class to help calculate training error rate
+log_reg_prob <- predict(diab_log_reg_good, standardize_Diab, type = "response")
+
+# Predicted classes (using 0.5 cutoff)
+log_reg_pred <- ifelse(log_reg_prob >= 0.5, "1", "0")
+
+# Training error rate
+1 - mean(log_reg_pred == standardize_Diab[, "Outcome"])
+
+
+```
+
+## Problem 2
+
+(a):
+
+```{r, fig.width=4, fig.height=4}
+#Logistic regression model with all predictors
+diab_log_reg_all <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+                    SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+                        family = binomial, data = standardize_Diab)
+#summary(diab_log_reg_all)
+
+# ----------------------------------Error rate calculation------------------------
+log_reg_all_prob <- predict(diab_log_reg_all, standardize_Diab, type = "response")
+# Predicted classes (using 0.5 cutoff)
+log_reg_all_pred <- ifelse(log_reg_all_prob >= 0.5, "1", "0")
+
+# Training error rate
+1 - mean(log_reg_all_pred == standardize_Diab[, "Outcome"])
+
+#--------------------------Confusion matrix---------------------------------------
+table(log_reg_all_pred, standardize_Diab[, "Outcome"])
+
+# Calculate sensitivity and specificity from above obtained confusion matrix
+c(156/(112 + 156), 445/(445 + 55))  
+
+#---------------------------------ROC curve---------------------------------------
+# Plot the ROC curve to get the area under the curve, AUC
+roc_log_reg_all <- roc(standardize_Diab[, "Outcome"], log_reg_all_prob, 
+                       levels = c("1", "0"))
+roc_log_reg_all
+#AUC : 0.8394
+
+plot(roc_log_reg_all, legacy.axes = T)
+
+
+```
+# (b): 
+
+```{r}
+#Number of predictions, n = number of rows
+num_pred <- nrow(standardize_Diab)
+
+# Perform LOOCV mentioned in lecture notes for chapter 5
+for (i in 1:num_pred) {
+  #Split standardized data to test and training set and leave out the ith observation (xi, yi)
+  train_data <- standardize_Diab[-i, ]
+  #Use the ith observation to predict yi_hat
+  test_data <- standardize_Diab[i, , drop = FALSE]
+  
+  #Fit model as in 2(a)
+  model_new <- glm(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + 
+                  Insulin + BMI + DiabetesPedigreeFunction + Age , 
+                  family = binomial, data = train_data)
+  
+  #Predict yi_hat
+  y_hat <- predict(model_new, newdata = test_data, type = "response")
+  num_pred[i] <- ifelse(y_hat > 0.5, 1, 0)
+  
+} #end forloop
+
+#Return the final error rate by calculating true value of y, y_i
+yi <- as.numeric(standardize_Diab$Outcome) - 1
+#Compute MSE for the ith prediction, MSE_i to obtain approximately unbiased 
+#estimate of the test MSE
+test_error_rate <- mean(num_pred != yi)
+paste("Test Error Rate using LOOCV:", test_error_rate)
+
+```
+# (c): 
+
+```{r}
+# Using the 'boot' package we calculate error rate using LOOCV method with the cv.glm function
+cv_error <- cv.glm(standardize_Diab, diab_log_reg_all)
+cv_error$delta
+
+# test error rate of model using LOOCV is 0.157 which does not match 2(b) so we 
+#use a cost function to calculate LOOCV test error because this function helps 
+#to evaluate how well our model performs more accuartely.
+
+# Define a cost function for error rate
+cost_loocv <- function(r, pi = 0) mean(abs(r - pi) > 0.5)
+
+# Perform LOOCV using the boot package
+cv_error_new <- cv.glm(standardize_Diab, diab_log_reg_all, cost = cost_loocv, 
+                       K = nrow(standardize_Diab))
+
+# Calculate the misclassification error rate
+test_error_rate <- cv_error_new$delta[1]
+cat("Test Error Rate using LOOCV:", test_error_rate, "\n")
+
+#Now the test error rate is 0.222 which matched our 2(b) implementation from scratch
+
+```
+
+# (d): 
+
+```{r, fig.width=4, fig.height=4}
+#LDA on data for all predictors
+diab_lda <- lda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + 
+            Insulin + BMI + DiabetesPedigreeFunction + Age, data = standardize_Diab)
+
+# Get predictions for data
+lda_pred <- predict(diab_lda, standardize_Diab)$class
+
+# Confusion matrix for training and test data using the caret package and 
+#using confusionMatrix function
+cm_lda <- confusionMatrix(lda_pred, standardize_Diab$Outcome)
+cm_lda
+
+# Misclassification/error rate 
+mcr_lda <- 1 - cm_lda$overall['Accuracy']
+mcr_lda
+
+lda_lr_prob <- predict(diab_lda, standardize_Diab)$posterior[,2]
+
+#ROC 
+roc_lda_diab <- roc(standardize_Diab$Outcome, lda_lr_prob)
+roc_lda_diab
+#AUC : 0.8393
+
+plot(roc_lda_diab, col = "pink")
+
+# Define the train control with LOOCV. We define a training control because we 
+#specify parameters for the training and includes the LOOCV method.
+train_ctrl <- trainControl(method = "LOOCV")
+
+# Train the LDA model using the train function defined above
+diab_lda_train <- train(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+            SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+            data = standardize_Diab, method = "lda", trControl = train_ctrl)
+
+# Calculate the test error rate
+test_error_rate <- 1 - diab_lda_train$results$Accuracy
+print(paste("Test Error Rate using LOOCV:", test_error_rate))
+
+
+```
+
+# (e): 
+
+```{r, fig.width=4, fig.height=4}
+#QDA on the data for all predictors
+diab_qda <- qda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + 
+          Insulin + BMI + DiabetesPedigreeFunction + Age, data = standardize_Diab)
+
+# Get predictions 
+qda_pred <- predict(diab_qda, standardize_Diab)$class
+
+# Confusion matrix 
+cm_qda <- confusionMatrix(qda_pred, standardize_Diab$Outcome)
+cm_qda
+
+# Misclassification/error rate 
+mcr_qda <- 1 - cm_qda$overall['Accuracy']
+mcr_qda
+
+qda_lr_prob <- predict(diab_lda, standardize_Diab)$posterior[,2]
+
+#ROC 
+roc_qda_diab <- roc(standardize_Diab$Outcome, qda_lr_prob)
+roc_qda_diab
+#AUC : 0.8393
+
+plot(roc_qda_diab, col = "blue")
+
+
+# Train the QDA model using the train function defined above
+diab_qda_train <- train(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+          SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+          data = standardize_Diab, method = "qda", trControl = train_ctrl)
+
+# Calculate the test error rate
+test_error_rate <- 1 - diab_qda_train$results$Accuracy
+print(paste("Test Error Rate using LOOCV:", test_error_rate))
+
+```
+
+# (f): 
+
+```{r, fig.width=4, fig.height=4}
+#Naive bayes on training and test data for all predictors
+diab_nbc <- naiveBayes(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+          SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+          data = standardize_Diab)
+
+# Get predictions for test data and training data
+nbc_pred <- predict(diab_nbc, standardize_Diab)
+
+# Confusion matrix for training data and test data
+cm_nbc <- confusionMatrix(nbc_pred, standardize_Diab$Outcome)
+cm_nbc
+
+# Misclassification rate for training data and test data
+mcr_nbc <- 1 - cm_nbc$overall['Accuracy']
+mcr_nbc
+
+nbc_lr_prob <- predict(diab_nbc, standardize_Diab, type = "raw")[,2]
+
+#ROC 
+roc_nbc_diab <- roc(standardize_Diab$Outcome, nbc_lr_prob)
+roc_nbc_diab
+#AUC : 0.8243
+
+plot(roc_nbc_diab)
+
+# Train the Naive bayes model using the train function defined above
+diab_nbc_train <- train(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+            SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+            data = standardize_Diab, method = "nb", trControl = train_ctrl)
+
+# Calculate the test error rate
+test_error_rate <- 1 - diab_nbc_train$results$Accuracy
+print(paste("Test Error Rate using LOOCV:", test_error_rate))
+
+```
+
+# (g): 
+
+```{r, fig.width=4, fig.height=4}
+#LDA on data for all predictors
+diab_lda_all <- lda(Outcome ~ Pregnancies + Glucose + BloodPressure + Insulin + 
+                BMI + DiabetesPedigreeFunction + Age, data = standardize_Diab)
+
+# Get predictions 
+lda_pred_all <- predict(diab_lda_all, standardize_Diab)$class
+
+# Confusion matrix 
+cm_lda_all <- confusionMatrix(lda_pred_all, standardize_Diab$Outcome)
+cm_lda_all
+
+# Misclassification rate 
+mcr_lda_all <- 1 - cm_lda_all$overall['Accuracy']
+mcr_lda_all
+
+lda_lr_prob_all <- predict(diab_lda_all, standardize_Diab)$posterior[,2]
+
+#ROC 
+roc_lda_diab_all <- roc(standardize_Diab$Outcome, lda_lr_prob_all)
+roc_lda_diab_all
+#AUC : 0.8394
+
+plot(roc_lda_diab_all, col = "green")
+
+# Train the LDA model using the train function defined above
+diab_lda_good_train <- train(Outcome ~ Pregnancies + Glucose + BloodPressure + 
+          SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+          data = standardize_Diab, method = "lda", trControl = train_ctrl)
+
+# Calculate the test error rate
+test_error_rate <- 1 - diab_lda_good_train$results$Accuracy
+print(paste("Test Error Rate using LOOCV:", test_error_rate))
+
+
+```
+
+# (h): 
+
+```{r, fig.width=4, fig.height=4}
+set.seed(2)
+
+#Train a KNN model using method = knn for k = 1 to 100 for finding optimal K and loocv error rate all at once
+knn_loocv_h <- train(form = Outcome ~ Pregnancies + Glucose + BloodPressure + 
+      SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, 
+      data = standardize_Diab, method = "knn", trControl = train_ctrl, 
+      tuneGrid = expand.grid(k = seq(from = 1, to = 100, by = 1)))
+
+#Optimal knn = 23
+knn_loocv_h
+
+# Extract predictions for our knn model above
+diab_knn_pred <- knn_loocv_h$pred
+
+# Calculate the test error rate using loocv
+error_rate_loocv <- mean(diab_knn_pred$pred != diab_knn_pred$obs)
+error_rate_loocv
+
+# Confusion matrix 
+cm_knn <- confusionMatrix(diab_knn_pred$pred, diab_knn_pred$obs)
+cm_knn
+
+# Misclassification/error rate matches the loocv error rate
+mcr_knn <- 1 - cm_knn$overall['Accuracy']
+mcr_knn
+
+#ROC 
+roc_knn_diab <- roc(diab_knn_pred$obs, as.numeric(diab_knn_pred$pred))
+roc_knn_diab
+#AUC : 0.6804
+
+plot(roc_knn_diab, col = "red")
+
+
+```
+
