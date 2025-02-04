@@ -1,0 +1,559 @@
+---
+title: "Section 2: Code"
+output: pdf_document
+geometry: margin = 0.5in
+header-includes:
+  - \usepackage{setspace}
+  - \setstretch{1.2}
+  - \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Load Required Libraries
+library(mvtnorm)
+library(MASS)
+library(e1071)
+library(pROC)
+library(ggplot2)
+library(ggcorrplot)
+library(corrplot)
+library(dplyr)
+library(caret)
+library(class)
+library(reshape2)
+
+```
+
+# 1
+(a):
+```{r, fig.width=4, fig.height=4}
+#Read the data and convert qualitative variables 'day' and 'month' to factors
+trainforest <- read.csv("forestfires.csv")
+trainforest$day <- as.factor(trainforest$day)
+trainforest$month <- as.factor(trainforest$month)
+
+#---------DATA ANALYSIS : ------------------------
+#Check for missing values 
+#sum(is.na(trainforest))
+
+#Check the structure of the data we are working with to know what variables we have, etc.
+#str(trainforest)
+#summary(trainforest)
+
+#-------------------------PLOTS : --------------------------------------
+
+#Histograms and boxplots of area with other predictors that are generally known to cause Forestfires are plotted
+
+#Indicates that 'temp' might be normally distributed because of symmetry 
+ggplot(trainforest, aes(x=temp)) + geom_histogram(binwidth=1, fill="pink", color="black") + 
+  labs(title="Histogram of Temperature", x="Temperature", y="Frequency")  
+ggplot(trainforest, aes(y=temp)) + geom_boxplot(fill="yellow", color="black") +
+  labs(title="Boxplot of Temperature", y="Temperature")
+
+#Very left skewed, so not normal and may require transformation to make data analysis more insightful.
+ggplot(trainforest, aes(x=area)) + geom_histogram(binwidth=20, fill="pink", color="black") + 
+  labs(title="Histogram of Burned Area", x="Burned Area", y="Frequency") 
+ggplot(trainforest, aes(y=area)) + geom_boxplot(fill="yellow", color="black") +
+  labs(title="Boxplot of Burned Area", y="Burned Area")
+
+#Scatter plots to see realationship between variables like rain, temperature and FFMC
+ggplot(trainforest, aes(x=rain, y=area)) + geom_point(color="blue") + 
+  labs(title="Scatter Plot of Area vs. Rain", x="Rain", y="Burned Area")
+
+ggplot(trainforest, aes(x=temp, y=area)) + geom_point(color="blue") + 
+  labs(title="Scatter Plot of Area vs. Temperature", x="Temperature", y="Burned Area")
+
+ggplot(trainforest, aes(x=FFMC, y=area)) + geom_point(color="blue") +
+  labs(title="Scatter Plot of Area vs. FFMC", x="FFMC", y="Burned Area")
+
+# Melting the dataset for faceting to see all histograms across all predictors -- makes it easier to analyse and not have to write code for all predictors and area plotting
+trainforest_melted <- melt(trainforest, id.vars = "area")
+
+# Create faceted scatter plots to see realtionship to determine which predictor is strong for our response 'area'
+ggplot(trainforest_melted, aes(x=value, y=area)) + geom_point(color="blue") + 
+  facet_wrap(~variable, scales="free_x") +
+  labs(title="Scatter Plots of Area vs. Other Predictors", x="Value", y="Area burned")
+
+
+# Clean data to see correlation matrix to get more insight on how variables are correlated with each other to get an idea of which predictors can be used to model. This is required because we also look at how qualitative variables like 'day' and 'month' are correlated with area burned.
+trainforest_encoded <- cbind(trainforest, model.matrix(~day + month - 1, data=trainforest))
+trainforest_encoded <- trainforest_encoded[, !(names(trainforest_encoded) %in% c("day", "month"))] # Remove original 'day' and 'month' columns
+
+# Calculate the correlation matrix and plot it
+cor_matrix <- cor(trainforest_encoded)
+corrplot(cor_matrix, method="circle", title="Correlation Matrix")
+
+```
+
+(b): 
+```{r, fig.width=3, fig.height=3}
+
+# Histogram of the original distribution of area
+ggplot(trainforest, aes(x = area)) + geom_histogram(binwidth = 10, fill = "pink", color = "black") +
+  labs(title = "Distribution of Area", x = "Area", y = "Frequency")
+
+# Apply log transformation mentioned above
+trainforest$area_new <- log(trainforest$area + 1)
+
+# Histogram of the log-transformed area: Still skewed to the left but clearly the height of the bins have been transformed.
+ggplot(trainforest, aes(x = area_new)) + geom_histogram(binwidth = 0.5, fill = "pink", color = "black") +
+  labs(title = "Distribution of Log-Transformed Area", x = "Log(area + 1)", y = "Frequency")
+
+```
+
+(c): 
+```{r, fig.width=3, fig.height=3}
+# Build a simple linear regression model for each predictor variable to predict burned area. From now on, we will consider the transformed area as our response variable.
+
+model_temp <- lm(area_new ~ temp, trainforest)
+summary(model_temp) #not sig
+
+model_RH <- lm(area_new ~ RH, trainforest)
+#summary(model_RH) #not sig
+
+model_X <- lm(area_new ~ X, trainforest)
+#summary(model_X) #not sig
+
+model_Y <- lm(area_new ~ Y, trainforest)
+#summary(model_Y) #not sig
+
+model_FFMC <- lm(area_new ~ FFMC, trainforest)
+#summary(model_FFMC) #not sig
+
+model_DMC <- lm(area_new ~ DMC, trainforest)
+#summary(model_DMC) #not sig
+
+model_DC <- lm(area_new ~ DC, trainforest)
+#summary(model_DC) #not sig
+
+model_ISI <- lm(area_new ~ ISI, trainforest)
+#summary(model_ISI) #not sig
+
+model_month <- lm(area_new ~ month, trainforest)
+summary(model_month) #SIG
+
+model_day <- lm(area_new ~ day, trainforest)
+#summary(model_day) #not sig
+
+model_wind <- lm(area_new ~ wind, trainforest)
+#summary(model_wind) #not sig
+
+model_rain <- lm(area_new ~ rain, trainforest)
+#summary(model_rain) #not sig
+
+# Function to create scatter plots with regression lines
+plot_regression <- function(predictor, response, data) {
+  ggplot(data, aes_string(x = predictor, y = response)) +
+    geom_point() +
+    geom_smooth(method = "lm", col = "blue") +
+    labs(title = paste("Regression of", response, "on", predictor),
+         x = predictor, y = response) +
+    theme_minimal()
+}
+
+# Create regression plots to see that month affects area burned.
+#plot_regression("temp", "area_new", trainforest)
+#plot_regression("RH", "area_new", trainforest)
+#plot_regression("X", "area_new", trainforest)
+#plot_regression("Y", "area_new", trainforest)
+#plot_regression("FFMC", "area_new", trainforest)
+#plot_regression("DMC", "area_new", trainforest)
+#plot_regression("DC", "area_new", trainforest)
+#plot_regression("ISI", "area_new", trainforest)
+plot_regression("month", "area_new", trainforest)
+plot_regression("day", "area_new", trainforest)
+plot_regression("wind", "area_new", trainforest)
+#plot_regression("rain", "area_new", trainforest)
+
+```
+
+(d):
+```{r}
+multi_all_lm <- lm(area_new ~ temp + X + Y + month  + DMC + DC + RH + ISI + day + FFMC + wind + rain , data = trainforest)
+summary(multi_all_lm)
+
+```
+
+(e):
+```{r}
+goodmodel_lm <- lm(area_new ~ temp + month + DMC + DC + RH + wind + rain +ISI , data = trainforest)
+summary(goodmodel_lm)
+
+```
+
+(g): 
+```{r}
+# Set quantitative predictors 'temp', 'DMC', 'DC', 'RH', 'wind', 'rain', and 'ISI' to their sample means.
+mean_temp <- mean(trainforest$temp, na.rm = TRUE)
+mean_DMC <- mean(trainforest$DMC, na.rm = TRUE)
+mean_DC <- mean(trainforest$DC, na.rm = TRUE)
+mean_RH <- mean(trainforest$RH, na.rm = TRUE)
+mean_wind <- mean(trainforest$wind, na.rm = TRUE)
+mean_rain <- mean(trainforest$rain, na.rm = TRUE)
+mean_ISI <- mean(trainforest$ISI, na.rm = TRUE)
+
+# Set qualitative predictor 'month' to the most frequent category
+most_freq_month <- names(sort(table(trainforest$month), decreasing = TRUE))[1]
+
+# Create a new data frame with these values to include in predict function
+mean_freq_data <- data.frame(temp = mean_temp, month = most_freq_month, DMC = mean_DMC,
+  DC = mean_DC, RH = mean_RH, wind = mean_wind, rain = mean_rain, ISI = mean_ISI)
+
+# Use the model to make a prediction for burned area. We take exponent of the burned area prediction and subtract it from 1 because we have transformed our data using log transformation and inverse of log(x+1) = exp(x)-1
+predicted_area_new <- predict(goodmodel_lm, mean_freq_data)
+predicted_area <- exp(predicted_area_new) - 1
+predicted_area
+
+```
+
+(h):  
+```{r}
+# Residuals
+residuals <- residuals(goodmodel_lm)
+
+# Diagnostic plots
+par(mfrow = c(2, 2))
+plot(goodmodel_lm, which= 1)
+
+# Identify outliers using Cook's distance
+cooksd <- cooks.distance(goodmodel_lm)
+plot(cooksd, pch="*", cex=2, main="Cook's Distance")
+abline(h = 4/(nrow(trainforest)-length(coef(goodmodel_lm))), col="blue")
+text(x=1:length(cooksd), y=cooksd, labels=ifelse(cooksd>4/(nrow(trainforest)-length(coef(goodmodel_lm))), names(cooksd), ""), col="blue")
+
+# Identify influential points (Cook's distance > 4/n)
+influential_points <- which(cooksd > (4 / nrow(trainforest)))
+print(influential_points)
+
+# Remove influential points (outliers) and refit model after removing 
+trainforest_no_outliers <- trainforest[-influential_points, ]
+
+# Refit the model 
+goodmodel_lm_no_outliers <- lm(area_new ~ temp + month + DMC + DC + RH + wind + rain + ISI, data = trainforest_no_outliers)
+summary(goodmodel_lm_no_outliers)
+
+# Identify levels in the original model and refitted model 
+original_levels <- names(coef(goodmodel_lm))
+refitted_levels <- names(coef(goodmodel_lm_no_outliers))
+
+# Find missing levels in the refitted model
+missing_levels <- setdiff(original_levels, refitted_levels)
+#missing_levels
+
+# Create a named vector of zeros for missing levels to combine the refitted coefficients with the missing coefficients
+missing_coefficients <- setNames(rep(0, length(missing_levels)), missing_levels)
+refitted_coefficients_final <- c(coef(goodmodel_lm_no_outliers), missing_coefficients)
+
+# Ensure the order matches the original coefficients
+refitted_coefficients_final <- refitted_coefficients_final[original_levels]
+
+# Compare coefficients
+comparison <- data.frame(
+  Original = coef(goodmodel_lm),
+  Refitted = refitted_coefficients_final
+)
+comparison
+
+```
+
+# 2
+(a): Exploratory analysis
+
+```{r, fig.width=3, fig.height=3}
+# Read the data
+traindiabetes <- read.csv("diabetes_train.csv")
+testdiabetes <- read.csv("diabetes_test.csv")
+
+# Check for missing values
+#sum(is.na(traindiabetes))
+
+#Convert outcome to a factor variable because it is qualitative
+traindiabetes$Outcome <- as.factor(traindiabetes$Outcome)
+#table(traindiabetes$Outcome)
+
+# Convert Outcome to numeric in order to calculate correlation matrix and plot
+traindiabetes$Outcome_numeric <- as.numeric(traindiabetes$Outcome) - 1
+
+# Calculate the correlation matrix including Outcome_numeric
+cor_matrix_with_outcome <- cor(traindiabetes[, sapply(traindiabetes, is.numeric)])
+corrplot(cor_matrix_with_outcome, method = "circle",title = "Coorelation matrix ")
+#pregnancies, glucose, bmi, age, blood pressure look like they are strong predictors of diabetes
+
+# Boxplots of various predictors (inferred from the correlation plot) against Outcome
+#ggplot(traindiabetes, aes(x = Outcome, y = Pregnancies)) + geom_boxplot() + ggtitle("Boxplot of Pregnancies by Outcome") 
+#ggplot(traindiabetes, aes(x = Outcome, y = Glucose)) + geom_boxplot() + ggtitle("Boxplot of Glucose by Outcome") 
+#ggplot(traindiabetes, aes(x = Outcome, y = BMI)) + geom_boxplot() + ggtitle("Boxplot of BMI by Outcome") 
+#ggplot(traindiabetes, aes(x = Outcome, y = Age)) + geom_boxplot() + ggtitle("Boxplot of Age by Outcome") 
+#ggplot(traindiabetes, aes(x = Outcome, y = BloodPressure)) + geom_boxplot() + ggtitle("Boxplot of BP by Outcome") 
+#ggplot(traindiabetes, aes(x = Outcome, y = Insulin)) + geom_boxplot() + ggtitle("Boxplot of Insulin by Outcome") 
+
+# Melt the data for faceting to avoid having many boxplots.
+melted_data_facetwrap <- melt(traindiabetes, id.vars = "Outcome")
+
+# Create the faceted boxplot of predictors vs outcome
+ggplot(melted_data_facetwrap, aes(x = Outcome, y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free_y") +
+  ggtitle("Boxplots of Predictors by Outcome") +
+  theme_minimal()
+
+#-------------------STANDARDIZING TRAINING AND TEST VARIABLES--------------------------------
+# Function to standardize the training and test variable
+standardize <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+
+# Standardize all columns except "Outcome"
+standardize_trainD <- traindiabetes %>%
+  mutate(across(-Outcome, standardize))
+
+standardize_testD <- testdiabetes %>%
+  mutate(across(-Outcome, standardize))
+
+# View the standardized data
+#standardize_trainD
+#standardize_testD
+
+```
+
+(b):
+
+```{r}
+#LDA on training and test data for all predictors
+trainD_lda <- lda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_trainD)
+#trainD_lda
+
+testD_lda <- lda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_testD)
+#testD_lda
+
+# Get predictions for test and training data
+lda_pred_testD <- predict(testD_lda, standardize_trainD)$class
+lda_pred_trainD <- predict(trainD_lda, standardize_trainD)$class
+
+# Confusion matrix for training and test data using the caret package and using confusionMatrix function
+conf_matrix_trainD <- confusionMatrix(lda_pred_trainD, standardize_trainD$Outcome)
+conf_matrix_trainD
+conf_matrix_testD <- confusionMatrix(lda_pred_testD, standardize_trainD$Outcome)
+conf_matrix_testD
+
+# Misclassification rate for training and test data
+misclass_rate_trainD <- 1 - conf_matrix_trainD$overall['Accuracy']
+misclass_rate_trainD
+misclass_rate_testD <- 1 - conf_matrix_testD$overall['Accuracy']
+misclass_rate_testD
+
+
+```
+
+(c):
+
+```{r}
+#QDA on training and test data for all predictors
+trainD_qda <- qda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_trainD)
+#trainD_qda
+
+testD_qda <-  qda(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_testD)
+#testD_qda
+
+# Get predictions for test data and training data
+qda_pred_testD <- predict(testD_qda, standardize_trainD)$class
+qda_pred_trainD <- predict(trainD_qda, standardize_trainD)$class
+
+# Confusion matrix for training data and test data
+conf_matrix_trainD_qda <- confusionMatrix(qda_pred_trainD, standardize_trainD$Outcome)
+conf_matrix_trainD_qda
+conf_matrix_testD_qda <- confusionMatrix(qda_pred_testD, standardize_trainD$Outcome)
+conf_matrix_testD_qda
+
+# Misclassification rate for training data and test data
+misclass_rate_trainD_qda <- 1 - conf_matrix_trainD_qda$overall['Accuracy']
+misclass_rate_trainD_qda
+misclass_rate_testD_qda <- 1 - conf_matrix_testD_qda$overall['Accuracy']
+misclass_rate_testD_qda
+
+```
+
+(d):
+
+```{r}
+#Naive Bayes for training and test data
+nb_fit_trainD <- naiveBayes(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_trainD)
+#nb_fit_trainD
+
+nb_fit_testD <- naiveBayes(Outcome ~ Pregnancies + Glucose + BloodPressure + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + Age, standardize_testD)
+#nb_fit_testD
+
+# Get predicted classes for test and training data
+nb_pred_testD <- predict(nb_fit_testD, standardize_trainD)
+#table(nb_pred_testD, standardize_trainD$Outcome)
+
+nb_pred_trainD <- predict(nb_fit_trainD, standardize_trainD)
+#table(nb_pred_trainD, standardize_trainD$Outcome)
+
+# Confusion matrix for training data and test data
+conf_matrix_trainD_nb <- confusionMatrix(nb_pred_trainD, standardize_trainD$Outcome)
+conf_matrix_trainD_nb
+conf_matrix_testD_nb <- confusionMatrix(nb_pred_testD, standardize_trainD$Outcome)
+conf_matrix_testD_nb
+
+# Misclassification rate for training data and test data
+misclass_rate_trainD_nb <- 1 - conf_matrix_trainD_nb$overall['Accuracy']
+misclass_rate_trainD_nb
+misclass_rate_testD_nb <- 1 - conf_matrix_testD_nb$overall['Accuracy']
+misclass_rate_testD_nb
+
+```
+
+(e):
+
+```{r, fig.width=3, fig.height=3}
+set.seed(1)
+
+#To do KNN, we use code from Mini Project 1
+
+#Set outcome as response variable
+train_resp <- as.numeric(as.factor(traindiabetes$Outcome)) 
+test_resp <- as.numeric(as.factor(testdiabetes$Outcome))
+
+#create a vector containing predictors for both training and test data
+trainingset.X <- cbind(standardize_trainD$Pregnancies, standardize_trainD$Glucose, standardize_trainD$BloodPressure, standardize_trainD$BMI, standardize_trainD$Age)
+
+testset.X <- cbind(standardize_testD$Pregnancies, standardize_testD$Glucose, standardize_testD$BloodPressure, standardize_testD$BMI, standardize_testD$Age)
+
+# Now, we fit KNN for several values of K (1-100)
+ks <- c(seq(1, 30, by = 1), seq(35, 100, by = 5))
+nks <- length(ks)       
+
+# Store training and test error rate for each value of k ranging from 1 to 100.
+err.rate.train <- numeric(length = nks)
+err.rate.test <- numeric(length = nks)
+
+#Set the names of the error rate so that they correspond to the right value of k
+names(err.rate.train) <- names(err.rate.test) <- ks        
+for (i in seq(along = ks)) {
+  mod.train <- knn(trainingset.X, trainingset.X, train_resp, k = ks[i])   # KNN for training data
+  mod.test <- knn(trainingset.X, testset.X, train_resp, k = ks[i])        # KNN for test data
+  err.rate.train[i] <- 1 - sum(mod.train == train_resp)/length(train_resp) # Training error rate (1 - accuracy)
+  err.rate.test[i] <- 1 - sum(mod.test == test_resp)/length(test_resp)     # Test error rate
+}
+
+# Calculate optimal value of k and obtain its corresponding test and training error rates
+result <- data.frame(ks, err.rate.train, err.rate.test)
+result[err.rate.test == min(result$err.rate.test), ]
+
+```
+
+# 3:
+(a): Exploratory data analysis
+```{r, fig.width=3, fig.height=3}
+#Read the data and convert qualitative variable group to factor
+admission <- read.csv("admission.csv")
+admission$Group <- as.factor(admission$Group)
+
+#Obtain test and training data from original dataset according to specifications in the question
+admit <- which(admission$Group==1)
+dont_admit <- which(admission$Group==2)
+borderline <- which(admission$Group==3)
+
+admission_test <- rbind(admission[admit,][1:5,], admission[dont_admit,][1:5,], admission[borderline,][1:5,]) #test data
+admission_train <- rbind(admission[admit,][-(1:5),], admission[dont_admit,][-(1:5),], admission[borderline,][-(1:5),]) #training data
+
+# Boxplot for GPA by Group
+ggplot(admission, aes(x = Group, y = GPA)) + geom_boxplot() + labs(title = "Boxplot of GPA by Group", x = "Group", y = "GPA")
+
+# Boxplot for GMAT by Group
+ggplot(admission, aes(x = Group, y = GMAT)) + geom_boxplot() + labs(title = "Boxplot of GMAT by Group", x = "Group", y = "GMAT")
+
+# Histogram for GPA
+ggplot(admission, aes(x = GPA)) + geom_histogram(binwidth = 0.1, fill = "blue", color = "black", alpha = 0.7) + 
+  labs(title = "Histogram of GPA", x = "GPA", y = "Frequency")
+
+# Histogram for GMAT
+ggplot(admission, aes(x = GMAT)) + geom_histogram(binwidth = 20, fill = "pink", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of GMAT", x = "GMAT", y = "Frequency")
+
+```
+
+(b):
+
+```{r, fig.width=4, fig.height=4}
+#LDA on training and test data
+admit_lda <- lda(Group ~ GPA + GMAT, admission_train)
+admit_test_lda <- lda(Group ~ GPA + GMAT, admission_test)
+
+# Create a grid of values for GPA and GMAT to predict the decision boundary
+gpa_range <- seq(min(admission$GPA), max(admission$GPA), length.out = 100)
+gmat_range <- seq(min(admission$GMAT), max(admission$GMAT), length.out = 100)
+grid <- expand.grid(GPA = gpa_range, GMAT = gmat_range)
+
+# Predict the class for each data point in the grid created above
+grid$Group <- predict(admit_lda, newdata = grid)$class
+
+# Plot the decision boundary for training data
+ggplot(admission_train, aes(x = GPA, y = GMAT, color = Group)) +
+  geom_point() + 
+  geom_point(data = admission_test, shape = 1, size = 3) + 
+  geom_contour(data = grid, aes(z = as.numeric(Group)), color = "black", bins = 3) + #decision boundary
+  labs(title = "LDA Decision Boundary", x = "GPA", y = "GMAT") 
+
+# Get predictions for test data and training data
+admit_lda_pred_test <- predict(admit_test_lda, admission_train)$class
+admit_lda_pred_train <- predict(admit_lda, admission_train)$class
+
+# Confusion matrix for training data and test data
+conf_matrix_admTrain <- confusionMatrix(admit_lda_pred_train, admission_train$Group)
+conf_matrix_admTrain
+conf_matrix_admTest <- confusionMatrix(admit_lda_pred_test, admission_train$Group)
+conf_matrix_admTest
+
+# Misclassification rate for training and test data
+misclass_rate_admTrain <- 1 - conf_matrix_admTrain$overall['Accuracy']
+misclass_rate_admTrain
+misclass_rate_admTest <- 1 - conf_matrix_admTest$overall['Accuracy']
+misclass_rate_admTest
+
+```
+
+(c):
+
+```{r, fig.width=4, fig.height=4}
+#QDA on training and test data
+admit_qda <- qda(Group ~ GPA + GMAT, admission_train)
+admit_test_qda <- qda(Group ~ GPA + GMAT, admission_test)
+
+# Predict the class for each data point in the grid using the grid created for LDA in 2(b) above
+grid$Group <- predict(admit_qda, newdata = grid)$class
+
+# Plot the decision boundary of training data
+ggplot(admission_train, aes(x = GPA, y = GMAT, color = Group)) +
+  geom_point() + # Plot training data points
+  geom_point(data = admission_test, shape = 1, size = 3) + 
+  geom_contour(data = grid, aes(z = as.numeric(Group)), color = "black", bins = 3) + #decision boundary
+  labs(title = "QDA Decision Boundary", x = "GPA", y = "GMAT") 
+
+# Get predictions for test and training data
+admit_qda_pred_test <- predict(admit_test_qda, admission_train)$class
+admit_qda_pred_train <- predict(admit_qda, admission_train)$class
+
+# Confusion matrix for training  and test data
+conf_matrix_admTrain_qda <- confusionMatrix(admit_qda_pred_train, admission_train$Group)
+conf_matrix_admTrain_qda
+conf_matrix_admTest_qda <- confusionMatrix(admit_qda_pred_test, admission_train$Group)
+conf_matrix_admTest_qda
+
+# Misclassification rate for training and test data
+misclass_rate_admTrain_qda <- 1 - conf_matrix_admTrain_qda$overall['Accuracy']
+misclass_rate_admTrain_qda
+misclass_rate_admTest_qda <- 1 - conf_matrix_admTest_qda$overall['Accuracy']
+misclass_rate_admTest_qda
+
+```
+
+
+
+
+
