@@ -1,0 +1,21 @@
+Project Summary:
+Built a machine learning pipeline to predict the popularity of songs on Spotify using a dataset of over 32,000 tracks (1957–2020), leveraging audio features such as danceability, energy, loudness, and valence. Conducted thorough EDA, handled multicollinearity, and applied multiple modeling approaches to maximize predictive performance.
+
+Key Techniques Used:
+
+1) Data preprocessing and feature engineering (standardization, interaction terms, transformations)
+
+2) Model selection and comparison: Linear Regression, Ridge Regression, Random Forest, Gradient Boosting
+
+3) Hyperparameter tuning using GridSearchCV and cross-validation
+
+4) Evaluated models using R-squared, RMSE, and overfitting indicators
+
+Results:
+
+Gradient Boosting Regressor (tuned): Test R-squared ≈ 0.896, Training R-squared ≈ 0.874 — explaining over 80% of the variance in song popularity.
+
+Outcome:
+
+Demonstrated how feature interactions and advanced ensemble methods significantly outperform linear models in regression tasks involving skewed and complex data distributions. 
+Proposed future work includes implementing a recommendation system and exploring classification-based approaches for genre prediction.
